@@ -3,6 +3,7 @@
     stack --resolver=lts-12.6 script
         --package hspec
         --package process
+        --package temporary
 -}
 
 {-# OPTIONS_GHC -Wall -Werror #-}
@@ -26,6 +27,7 @@ import System.IO
     , hSetBuffering
     )
 import System.IO.Error (mkIOError)
+import System.IO.Temp (withSystemTempFile)
 import System.Process
     ( CreateProcess(..)
     , StdStream(..)
@@ -77,74 +79,97 @@ withCheckedProcess command args f = do
 main :: IO ()
 main = hspec $ do
     describe "timeoutProcess and withProcess" $ do
-        it "returns success when process returns 0 and action returns unit" $ do
-            mbResult <- timeoutProcess (fromSeconds 1) $ withProcess "./echo-demo" ["0"] $ \(hIn, hOut) -> do
-                hSetBuffering hIn NoBuffering
-                hSetBuffering hOut NoBuffering
-                hPutStrLn hIn "SOMEINPUT"
-                hPutStrLn hIn "QUIT"
-                void $ hGetLine hOut
-                void $ hGetLine hOut
-                return ()
-            mbResult `shouldBe` Just (ExitSuccess, ())
-        it "returns success when process returns 0 and action returns string" $ do
-            mbResult <- timeoutProcess (fromSeconds 1) $ withProcess "./echo-demo" ["0"] $ \(hIn, hOut) -> do
-                hSetBuffering hIn NoBuffering
-                hSetBuffering hOut NoBuffering
-                hPutStrLn hIn "SOMEINPUT"
-                hPutStrLn hIn "QUIT"
-                void $ hGetLine hOut
-                void $ hGetLine hOut
-                return "SOMERESULT"
-            mbResult `shouldBe` Just (ExitSuccess, "SOMERESULT")
-        it "returns failure when process returns non-0" $ do
-            mbResult <- timeoutProcess (fromSeconds 1) $ withProcess "./echo-demo" ["1"] $ \(hIn, hOut) -> do
-                hSetBuffering hIn NoBuffering
-                hSetBuffering hOut NoBuffering
-                hPutStrLn hIn "SOMEINPUT"
-                hPutStrLn hIn "QUIT"
-                void $ hGetLine hOut
-                void $ hGetLine hOut
-                return "SOMERESULT"
-            mbResult `shouldBe` Just (ExitFailure 1, "SOMERESULT")
-        it "should return nothing when it times out" $ do
-            mbResult <- timeoutProcess (fromSeconds 1) $ withProcess "./echo-demo" ["0"] $ \(hIn, hOut) -> do
-                hSetBuffering hIn NoBuffering
-                hSetBuffering hOut NoBuffering
-                hPutStrLn hIn "SOMEINPUT"
-                hPutStrLn hIn "DONTQUIT"
-                void $ hGetLine hOut
-                void $ hGetLine hOut
-                return "SOMERESULT"
-            mbResult `shouldBe` Nothing
+        it "returns success when process returns 0 and action returns unit" $
+            withTestScript $ \scriptPath -> do
+                mbResult <- timeoutProcess (fromSeconds 1) $ withProcess "sh" [scriptPath, "0"] $ \(hIn, hOut) -> do
+                    hSetBuffering hIn NoBuffering
+                    hSetBuffering hOut NoBuffering
+                    hPutStrLn hIn "SOMEINPUT"
+                    hPutStrLn hIn "QUIT"
+                    void $ hGetLine hOut
+                    void $ hGetLine hOut
+                    return ()
+                mbResult `shouldBe` Just (ExitSuccess, ())
+        it "returns success when process returns 0 and action returns string" $
+            withTestScript $ \scriptPath -> do
+                mbResult <- timeoutProcess (fromSeconds 1) $ withProcess "sh" [scriptPath, "0"] $ \(hIn, hOut) -> do
+                    hSetBuffering hIn NoBuffering
+                    hSetBuffering hOut NoBuffering
+                    hPutStrLn hIn "SOMEINPUT"
+                    hPutStrLn hIn "QUIT"
+                    void $ hGetLine hOut
+                    void $ hGetLine hOut
+                    return "SOMERESULT"
+                mbResult `shouldBe` Just (ExitSuccess, "SOMERESULT")
+        it "returns failure when process returns non-0" $
+            withTestScript $ \scriptPath -> do
+                mbResult <- timeoutProcess (fromSeconds 1) $ withProcess "sh" [scriptPath, "1"] $ \(hIn, hOut) -> do
+                    hSetBuffering hIn NoBuffering
+                    hSetBuffering hOut NoBuffering
+                    hPutStrLn hIn "SOMEINPUT"
+                    hPutStrLn hIn "QUIT"
+                    void $ hGetLine hOut
+                    void $ hGetLine hOut
+                    return "SOMERESULT"
+                mbResult `shouldBe` Just (ExitFailure 1, "SOMERESULT")
+        it "should return nothing when it times out" $
+            withTestScript $ \scriptPath -> do
+                mbResult <- timeoutProcess (fromSeconds 1) $ withProcess "sh" [scriptPath, "0"] $ \(hIn, hOut) -> do
+                    hSetBuffering hIn NoBuffering
+                    hSetBuffering hOut NoBuffering
+                    hPutStrLn hIn "SOMEINPUT"
+                    hPutStrLn hIn "DONTQUIT"
+                    void $ hGetLine hOut
+                    void $ hGetLine hOut
+                    return "SOMERESULT"
+                mbResult `shouldBe` Nothing
     describe "timeoutProcess and withCheckedProcess" $ do
-        it "returns when process returns 0" $ do
-            mbResult <- timeoutProcess (fromSeconds 1) $ withCheckedProcess "./echo-demo" ["0"] $ \(hIn, hOut) -> do
-                hSetBuffering hIn NoBuffering
-                hSetBuffering hOut NoBuffering
-                hPutStrLn hIn "SOMEINPUT"
-                hPutStrLn hIn "QUIT"
-                void $ hGetLine hOut
-                void $ hGetLine hOut
-                return "SOMERESULT"
-            mbResult `shouldBe` Just "SOMERESULT"
-        it "should throw when process returns non-0" $ do
-            timeoutProcess (fromSeconds 1) $ withCheckedProcess "./echo-demo" ["1"] $ \(hIn, hOut) -> do
-                hSetBuffering hIn NoBuffering
-                hSetBuffering hOut NoBuffering
-                hPutStrLn hIn "SOMEINPUT"
-                hPutStrLn hIn "QUIT"
-                void $ hGetLine hOut
-                void $ hGetLine hOut
-                return "SOMERESULT"
-            `shouldThrow` anyIOException
-        it "should return nothing when it times out" $ do
-            mbResult <- timeoutProcess (fromSeconds 1) $ withCheckedProcess "./echo-demo" ["0"] $ \(hIn, hOut) -> do
-                hSetBuffering hIn NoBuffering
-                hSetBuffering hOut NoBuffering
-                hPutStrLn hIn "SOMEINPUT"
-                hPutStrLn hIn "DONTQUIT"
-                void $ hGetLine hOut
-                void $ hGetLine hOut
-                return "SOMERESULT"
-            mbResult `shouldBe` Nothing
+        it "returns when process returns 0" $
+            withTestScript $ \scriptPath -> do
+                mbResult <- timeoutProcess (fromSeconds 1) $ withCheckedProcess "sh" [scriptPath, "0"] $ \(hIn, hOut) -> do
+                    hSetBuffering hIn NoBuffering
+                    hSetBuffering hOut NoBuffering
+                    hPutStrLn hIn "SOMEINPUT"
+                    hPutStrLn hIn "QUIT"
+                    void $ hGetLine hOut
+                    void $ hGetLine hOut
+                    return "SOMERESULT"
+                mbResult `shouldBe` Just "SOMERESULT"
+        it "should throw when process returns non-0" $
+            withTestScript $ \scriptPath -> do
+                timeoutProcess (fromSeconds 1) $ withCheckedProcess "sh" [scriptPath, "1"] $ \(hIn, hOut) -> do
+                    hSetBuffering hIn NoBuffering
+                    hSetBuffering hOut NoBuffering
+                    hPutStrLn hIn "SOMEINPUT"
+                    hPutStrLn hIn "QUIT"
+                    void $ hGetLine hOut
+                    void $ hGetLine hOut
+                    return "SOMERESULT"
+                `shouldThrow` anyIOException
+        it "should return nothing when it times out" $
+            withTestScript $ \scriptPath -> do
+                mbResult <- timeoutProcess (fromSeconds 1) $ withCheckedProcess "sh" [scriptPath, "0"] $ \(hIn, hOut) -> do
+                    hSetBuffering hIn NoBuffering
+                    hSetBuffering hOut NoBuffering
+                    hPutStrLn hIn "SOMEINPUT"
+                    hPutStrLn hIn "DONTQUIT"
+                    void $ hGetLine hOut
+                    void $ hGetLine hOut
+                    return "SOMERESULT"
+                mbResult `shouldBe` Nothing
+
+withTestScript ::  (FilePath -> IO a) -> IO a
+withTestScript f = withSystemTempFile "echo-script" $ \path h -> do
+    hPutStrLn h "#!/bin/bash\n\
+        \exit_code=$1\n\
+        \\n\
+        \while read line\n\
+        \do\n\
+        \  echo \"INPUT: $line\"\n\
+        \  if [ \"$line\" == 'QUIT' ]; then\n\
+        \    echo 'echo-demo exiting'\n\
+        \    exit $exit_code\n\
+        \  fi\n\
+        \done < /dev/stdin\n"
+    hClose h
+    f path
