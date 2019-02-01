@@ -30,6 +30,7 @@ import System.IO.Error (mkIOError)
 import System.IO.Temp (withSystemTempFile)
 import System.Process
     ( CreateProcess(..)
+    , ProcessHandle
     , StdStream(..)
     , createProcess
     , proc
@@ -41,29 +42,33 @@ import Text.Printf (printf)
 
 import Test.Hspec
 
-type ProcessAction a = (Handle, Handle) -> IO a
+type ProcessAction a = (Handle, Handle, Handle, ProcessHandle) -> IO a
 
-newtype Timeout = Timeout { unSeconds :: Int }
+newtype Timeout = Timeout { seconds :: Int }
 
 fromSeconds :: Int -> Timeout
 fromSeconds = Timeout
 
 timeoutProcess :: Timeout -> IO a -> IO (Maybe a)
-timeoutProcess t = timeout (unSeconds t * 1000000)
+timeoutProcess t = timeout (seconds t * 1000000)
+
+requireHandles :: (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle) -> (Handle, Handle, Handle, ProcessHandle)
+requireHandles (Just hIn, Just hOut, Just hErr, ph) = (hIn, hOut, hErr, ph)
+requireHandles _ = error "Handles required"
 
 withProcess :: String -> [String] -> ProcessAction a -> IO (ExitCode, a)
 withProcess command args f = bracketOnError
-    (createProcess (proc command args)
+    (requireHandles <$> createProcess (proc command args)
         { std_in = CreatePipe
         , std_out = CreatePipe
         , std_err = CreatePipe
         })
 
-    (\(_, _, _, pid) -> terminateProcess pid >> waitForProcess pid)
+    (\(_, _, _, ph) -> terminateProcess ph >> waitForProcess ph)
 
-    (\(Just hIn, Just hOut, _, pid) -> do
-        result <- f (hIn, hOut)
-        exitCode <- waitForProcess pid
+    (\(hIn, hOut, hErr, ph) -> do
+        result <- f (hIn, hOut, hErr, ph)
+        exitCode <- waitForProcess ph
         hClose hIn
         hClose hOut
         return (exitCode, result))
@@ -81,7 +86,7 @@ main = hspec $ do
     describe "timeoutProcess and withProcess" $ do
         it "returns success when process returns 0 and action returns unit" $
             withTestScript $ \scriptPath -> do
-                mbResult <- timeoutProcess (fromSeconds 1) $ withProcess "sh" [scriptPath, "0"] $ \(hIn, hOut) -> do
+                mbResult <- timeoutProcess (fromSeconds 1) $ withProcess "sh" [scriptPath, "0"] $ \(hIn, hOut, _, _) -> do
                     hSetBuffering hIn NoBuffering
                     hSetBuffering hOut NoBuffering
                     hPutStrLn hIn "SOMEINPUT"
@@ -92,7 +97,7 @@ main = hspec $ do
                 mbResult `shouldBe` Just (ExitSuccess, ())
         it "returns success when process returns 0 and action returns string" $
             withTestScript $ \scriptPath -> do
-                mbResult <- timeoutProcess (fromSeconds 1) $ withProcess "sh" [scriptPath, "0"] $ \(hIn, hOut) -> do
+                mbResult <- timeoutProcess (fromSeconds 1) $ withProcess "sh" [scriptPath, "0"] $ \(hIn, hOut, _, _) -> do
                     hSetBuffering hIn NoBuffering
                     hSetBuffering hOut NoBuffering
                     hPutStrLn hIn "SOMEINPUT"
@@ -103,7 +108,7 @@ main = hspec $ do
                 mbResult `shouldBe` Just (ExitSuccess, "SOMERESULT")
         it "returns failure when process returns non-0" $
             withTestScript $ \scriptPath -> do
-                mbResult <- timeoutProcess (fromSeconds 1) $ withProcess "sh" [scriptPath, "1"] $ \(hIn, hOut) -> do
+                mbResult <- timeoutProcess (fromSeconds 1) $ withProcess "sh" [scriptPath, "1"] $ \(hIn, hOut, _, _) -> do
                     hSetBuffering hIn NoBuffering
                     hSetBuffering hOut NoBuffering
                     hPutStrLn hIn "SOMEINPUT"
@@ -112,9 +117,21 @@ main = hspec $ do
                     void $ hGetLine hOut
                     return "SOMERESULT"
                 mbResult `shouldBe` Just (ExitFailure 1, "SOMERESULT")
+        it "returns SIGTERM when process terminated" $
+            withTestScript $ \scriptPath -> do
+                mbResult <- timeoutProcess (fromSeconds 1) $ withProcess "sh" [scriptPath, "1"] $ \(hIn, hOut, _, ph) -> do
+                    hSetBuffering hIn NoBuffering
+                    hSetBuffering hOut NoBuffering
+                    hPutStrLn hIn "SOMEINPUT"
+                    hPutStrLn hIn "DONTQUIT"
+                    void $ hGetLine hOut
+                    void $ hGetLine hOut
+                    terminateProcess ph
+                    return "SOMERESULT"
+                mbResult `shouldBe` Just (ExitFailure (-15), "SOMERESULT")
         it "should return nothing when it times out" $
             withTestScript $ \scriptPath -> do
-                mbResult <- timeoutProcess (fromSeconds 1) $ withProcess "sh" [scriptPath, "0"] $ \(hIn, hOut) -> do
+                mbResult <- timeoutProcess (fromSeconds 1) $ withProcess "sh" [scriptPath, "0"] $ \(hIn, hOut, _, _) -> do
                     hSetBuffering hIn NoBuffering
                     hSetBuffering hOut NoBuffering
                     hPutStrLn hIn "SOMEINPUT"
@@ -126,7 +143,7 @@ main = hspec $ do
     describe "timeoutProcess and withCheckedProcess" $ do
         it "returns when process returns 0" $
             withTestScript $ \scriptPath -> do
-                mbResult <- timeoutProcess (fromSeconds 1) $ withCheckedProcess "sh" [scriptPath, "0"] $ \(hIn, hOut) -> do
+                mbResult <- timeoutProcess (fromSeconds 1) $ withCheckedProcess "sh" [scriptPath, "0"] $ \(hIn, hOut, _, _) -> do
                     hSetBuffering hIn NoBuffering
                     hSetBuffering hOut NoBuffering
                     hPutStrLn hIn "SOMEINPUT"
@@ -137,7 +154,7 @@ main = hspec $ do
                 mbResult `shouldBe` Just "SOMERESULT"
         it "should throw when process returns non-0" $
             withTestScript $ \scriptPath -> do
-                timeoutProcess (fromSeconds 1) $ withCheckedProcess "sh" [scriptPath, "1"] $ \(hIn, hOut) -> do
+                timeoutProcess (fromSeconds 1) $ withCheckedProcess "sh" [scriptPath, "1"] $ \(hIn, hOut, _, _) -> do
                     hSetBuffering hIn NoBuffering
                     hSetBuffering hOut NoBuffering
                     hPutStrLn hIn "SOMEINPUT"
@@ -148,7 +165,7 @@ main = hspec $ do
                 `shouldThrow` anyIOException
         it "should return nothing when it times out" $
             withTestScript $ \scriptPath -> do
-                mbResult <- timeoutProcess (fromSeconds 1) $ withCheckedProcess "sh" [scriptPath, "0"] $ \(hIn, hOut) -> do
+                mbResult <- timeoutProcess (fromSeconds 1) $ withCheckedProcess "sh" [scriptPath, "0"] $ \(hIn, hOut, _, _) -> do
                     hSetBuffering hIn NoBuffering
                     hSetBuffering hOut NoBuffering
                     hPutStrLn hIn "SOMEINPUT"
