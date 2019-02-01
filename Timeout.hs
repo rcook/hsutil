@@ -91,8 +91,12 @@ main = hspec $ do
                     hSetBuffering hOut NoBuffering
                     hPutStrLn hIn "SOMEINPUT"
                     hPutStrLn hIn "QUIT"
-                    void $ hGetLine hOut
-                    void $ hGetLine hOut
+                    s0 <- hGetLine hOut
+                    s0 `shouldBe` "INPUT: SOMEINPUT"
+                    s1 <- hGetLine hOut
+                    s1 `shouldBe` "INPUT: QUIT"
+                    s2 <- hGetLine hOut
+                    s2 `shouldBe` "echo-script exiting"
                     return ()
                 mbResult `shouldBe` Just (ExitSuccess, ())
         it "returns success when process returns 0 and action returns string" $
@@ -184,7 +188,7 @@ withTestScript f = withSystemTempFile "echo-script" $ \path h -> do
         \do\n\
         \  echo \"INPUT: $line\"\n\
         \  if [ \"$line\" == 'QUIT' ]; then\n\
-        \    echo 'echo-demo exiting'\n\
+        \    echo 'echo-script exiting'\n\
         \    exit $exit_code\n\
         \  fi\n\
         \done < /dev/stdin\n"
