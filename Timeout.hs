@@ -4,6 +4,7 @@
         --package hspec
         --package process
         --package temporary
+        --package time
 -}
 
 {-# OPTIONS_GHC -Wall -Werror #-}
@@ -16,6 +17,11 @@ module Timeout (main) where
 
 import Control.Exception (bracketOnError)
 import Control.Monad (void)
+import Data.Time.Clock
+    ( DiffTime
+    , diffTimeToPicoseconds
+    , secondsToDiffTime
+    )
 import GHC.IO.Exception (IOErrorType(..))
 import System.Exit (ExitCode(..))
 import System.IO
@@ -44,16 +50,14 @@ import Test.Hspec
 
 type ProcessAction a = (Handle, Handle, Handle, ProcessHandle) -> IO a
 
-newtype Timeout = Timeout { seconds :: Int }
-
 shell :: String
 shell = "bash"
 
-fromSeconds :: Int -> Timeout
-fromSeconds = Timeout
+timeoutProcess :: DiffTime -> IO a -> IO (Maybe a)
+timeoutProcess = timeout . diffTimeToMicroseconds
 
-timeoutProcess :: Timeout -> IO a -> IO (Maybe a)
-timeoutProcess t = timeout (seconds t * 1000000)
+diffTimeToMicroseconds :: DiffTime -> Int
+diffTimeToMicroseconds = fromIntegral . (flip div) 1000000 . diffTimeToPicoseconds
 
 requireHandles :: (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle) -> (Handle, Handle, Handle, ProcessHandle)
 requireHandles (Just hIn, Just hOut, Just hErr, ph) = (hIn, hOut, hErr, ph)
@@ -89,7 +93,7 @@ main = hspec $ do
     describe "timeoutProcess and withProcess" $ do
         it "returns success when process returns 0 and action returns unit" $
             withTestScript $ \scriptPath -> do
-                mbResult <- timeoutProcess (fromSeconds 1) $ withProcess shell [scriptPath, "0"] $ \(hIn, hOut, _, _) -> do
+                mbResult <- timeoutProcess (secondsToDiffTime 1) $ withProcess shell [scriptPath, "0"] $ \(hIn, hOut, _, _) -> do
                     hSetBuffering hIn NoBuffering
                     hSetBuffering hOut NoBuffering
                     hPutStrLn hIn "SOMEINPUT"
@@ -104,7 +108,7 @@ main = hspec $ do
                 mbResult `shouldBe` Just (ExitSuccess, ())
         it "returns success when process returns 0 and action returns string" $
             withTestScript $ \scriptPath -> do
-                mbResult <- timeoutProcess (fromSeconds 1) $ withProcess shell [scriptPath, "0"] $ \(hIn, hOut, _, _) -> do
+                mbResult <- timeoutProcess (secondsToDiffTime 1) $ withProcess shell [scriptPath, "0"] $ \(hIn, hOut, _, _) -> do
                     hSetBuffering hIn NoBuffering
                     hSetBuffering hOut NoBuffering
                     hPutStrLn hIn "SOMEINPUT"
@@ -115,7 +119,7 @@ main = hspec $ do
                 mbResult `shouldBe` Just (ExitSuccess, "SOMERESULT")
         it "returns failure when process returns non-0" $
             withTestScript $ \scriptPath -> do
-                mbResult <- timeoutProcess (fromSeconds 1) $ withProcess shell [scriptPath, "1"] $ \(hIn, hOut, _, _) -> do
+                mbResult <- timeoutProcess (secondsToDiffTime 1) $ withProcess shell [scriptPath, "1"] $ \(hIn, hOut, _, _) -> do
                     hSetBuffering hIn NoBuffering
                     hSetBuffering hOut NoBuffering
                     hPutStrLn hIn "SOMEINPUT"
@@ -126,7 +130,7 @@ main = hspec $ do
                 mbResult `shouldBe` Just (ExitFailure 1, "SOMERESULT")
         it "returns SIGTERM when process terminated" $
             withTestScript $ \scriptPath -> do
-                mbResult <- timeoutProcess (fromSeconds 1) $ withProcess shell [scriptPath, "1"] $ \(hIn, hOut, _, ph) -> do
+                mbResult <- timeoutProcess (secondsToDiffTime 1) $ withProcess shell [scriptPath, "1"] $ \(hIn, hOut, _, ph) -> do
                     hSetBuffering hIn NoBuffering
                     hSetBuffering hOut NoBuffering
                     hPutStrLn hIn "SOMEINPUT"
@@ -138,7 +142,7 @@ main = hspec $ do
                 mbResult `shouldBe` Just (ExitFailure (-15), "SOMERESULT")
         it "should return nothing when it times out" $
             withTestScript $ \scriptPath -> do
-                mbResult <- timeoutProcess (fromSeconds 1) $ withProcess shell [scriptPath, "0"] $ \(hIn, hOut, _, _) -> do
+                mbResult <- timeoutProcess (secondsToDiffTime 1) $ withProcess shell [scriptPath, "0"] $ \(hIn, hOut, _, _) -> do
                     hSetBuffering hIn NoBuffering
                     hSetBuffering hOut NoBuffering
                     hPutStrLn hIn "SOMEINPUT"
@@ -150,7 +154,7 @@ main = hspec $ do
     describe "timeoutProcess and withCheckedProcess" $ do
         it "returns when process returns 0" $
             withTestScript $ \scriptPath -> do
-                mbResult <- timeoutProcess (fromSeconds 1) $ withCheckedProcess shell [scriptPath, "0"] $ \(hIn, hOut, _, _) -> do
+                mbResult <- timeoutProcess (secondsToDiffTime 1) $ withCheckedProcess shell [scriptPath, "0"] $ \(hIn, hOut, _, _) -> do
                     hSetBuffering hIn NoBuffering
                     hSetBuffering hOut NoBuffering
                     hPutStrLn hIn "SOMEINPUT"
@@ -161,7 +165,7 @@ main = hspec $ do
                 mbResult `shouldBe` Just "SOMERESULT"
         it "should throw when process returns non-0" $
             withTestScript $ \scriptPath -> do
-                timeoutProcess (fromSeconds 2) $ withCheckedProcess shell [scriptPath, "1"] $ \(hIn, hOut, _, _) -> do
+                timeoutProcess (secondsToDiffTime 2) $ withCheckedProcess shell [scriptPath, "1"] $ \(hIn, hOut, _, _) -> do
                     hSetBuffering hIn NoBuffering
                     hSetBuffering hOut NoBuffering
                     hPutStrLn hIn "SOMEINPUT"
@@ -172,7 +176,7 @@ main = hspec $ do
                 `shouldThrow` anyIOException
         it "should return nothing when it times out" $
             withTestScript $ \scriptPath -> do
-                mbResult <- timeoutProcess (fromSeconds 1) $ withCheckedProcess shell [scriptPath, "0"] $ \(hIn, hOut, _, _) -> do
+                mbResult <- timeoutProcess (secondsToDiffTime 1) $ withCheckedProcess shell [scriptPath, "0"] $ \(hIn, hOut, _, _) -> do
                     hSetBuffering hIn NoBuffering
                     hSetBuffering hOut NoBuffering
                     hPutStrLn hIn "SOMEINPUT"
